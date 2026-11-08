@@ -64,6 +64,7 @@ class User:
 
     @username.setter
     def username(self, value):
+        """Задаёт имя, запрещая пустые значения."""
         if not isinstance(value, str) or not value.strip():
             raise ValueError("Имя пользователя не может быть пустым")
         self._username = value.strip()
@@ -144,6 +145,7 @@ class Wallet:
 
     @balance.setter
     def balance(self, value):
+        """Задаёт баланс, запрещая отрицательные и нечисловые значения."""
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise ValueError("Баланс должен быть числом")
         if value < 0:

@@ -26,10 +26,12 @@ def log_action(action, verbose=False):
     """
 
     def decorator(func):
+        """Оборачивает функцию логированием."""
         signature = inspect.signature(func)
 
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
+            """Вызывает функцию и пишет результат операции в лог."""
             arguments = signature.bind(*args, **kwargs).arguments
             parts = [action, f"user='{_describe_user(arguments)}'"]
             if "currency_code" in arguments:

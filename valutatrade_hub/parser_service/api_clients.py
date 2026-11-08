@@ -67,6 +67,7 @@ class CoinGeckoClient(BaseApiClient):
     source_name = "CoinGecko"
 
     def fetch_rates(self):
+        """Запрашивает цены монет в USD и возвращает {'BTC_USD': ..., ...}."""
         base = self.config.BASE_CURRENCY
         id_map = self.config.CRYPTO_ID_MAP
         ids = [id_map[code] for code in self.config.CRYPTO_CURRENCIES]
@@ -94,6 +95,7 @@ class ExchangeRateApiClient(BaseApiClient):
     source_name = "ExchangeRate-API"
 
     def fetch_rates(self):
+        """Запрашивает курсы фиата к USD и возвращает {'EUR_USD': ..., ...}."""
         if not self.config.EXCHANGERATE_API_KEY:
             raise ApiRequestError(
                 f"{self.source_name}: не задан ключ EXCHANGERATE_API_KEY"

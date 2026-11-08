@@ -37,6 +37,7 @@ class FiatCurrency(Currency):
         self.issuing_country = issuing_country
 
     def get_display_info(self):
+        """Строка вида '[FIAT] USD — US Dollar (Issuing: United States)'."""
         return f"[FIAT] {self.code} — {self.name} (Issuing: {self.issuing_country})"
 
 
@@ -49,6 +50,7 @@ class CryptoCurrency(Currency):
         self.market_cap = market_cap
 
     def get_display_info(self):
+        """Строка вида '[CRYPTO] BTC — Bitcoin (Algo: SHA-256, MCAP: 1.12e12)'."""
         market_cap = f"{self.market_cap:.2e}".replace("e+", "e")
         return (
             f"[CRYPTO] {self.code} — {self.name} "

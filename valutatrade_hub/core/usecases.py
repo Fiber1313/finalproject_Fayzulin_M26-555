@@ -88,6 +88,7 @@ def save_portfolio(portfolio):
     """Сохраняет портфель: чтение → замена записи → атомарная запись."""
 
     def replace_record(portfolios):
+        """Заменяет запись портфеля пользователя в списке."""
         others = [p for p in portfolios if p["user_id"] != portfolio.user_id]
         others.append(portfolio.to_dict())
         return sorted(others, key=lambda item: item["user_id"])
