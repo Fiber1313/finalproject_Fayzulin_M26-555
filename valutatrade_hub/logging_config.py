@@ -8,6 +8,7 @@ from valutatrade_hub.infra.settings import SettingsLoader
 
 ACTIONS_LOGGER = "valutatrade.actions"
 PARSER_LOGGER = "valutatrade.parser"
+CONSOLE_FORMAT = "%(levelname)s: %(message)s"
 
 
 def _make_file_handler(path, settings):
@@ -39,3 +40,10 @@ def setup_logging():
         logger.setLevel(level)
         logger.addHandler(_make_file_handler(settings.get(file_key), settings))
         logger.propagate = False
+
+    # Шаги парсера дублируются в консоль, чтобы пользователь видел прогресс
+    console = logging.StreamHandler()
+    console.setFormatter(logging.Formatter(CONSOLE_FORMAT))
+    parser_logger = logging.getLogger(PARSER_LOGGER)
+    if len(parser_logger.handlers) == 1:
+        parser_logger.addHandler(console)

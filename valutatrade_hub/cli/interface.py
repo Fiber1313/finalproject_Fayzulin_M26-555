@@ -2,6 +2,8 @@
 
 import shlex
 
+from prettytable import PrettyTable
+
 from valutatrade_hub.core import usecases
 from valutatrade_hub.core.currencies import get_all_currencies, get_supported_codes
 from valutatrade_hub.core.exceptions import (
@@ -32,6 +34,11 @@ HELP_TEXT = """
   sell --currency <код> --amount <количество>     продать валюту
   get-rate --from <код> --to <код>                курс валюты
   list-currencies                                 поддерживаемые валюты
+  update-rates [--source coingecko|exchangerate]  обновить курсы из API
+  show-rates [--currency <код>] [--top <N>] [--base <код>]
+                                                  курсы из локального кеша
+  schedule-updates [--interval <сек>] [--times <N>]
+                                                  автообновление курсов
   help                                            эта справка
   exit                                            выход из программы
 """
@@ -151,21 +158,78 @@ def cmd_sell(options):
 def cmd_get_rate(options):
     """Команда get-rate."""
     from_code, to_code = require(options, "from", "to")
-    rate, updated_at = usecases.get_rate(from_code, to_code)
-    from_code, to_code = from_code.upper(), to_code.upper()
-    updated_text = updated_at.replace("T", " ") if updated_at else "неизвестно"
+    from_upper, to_upper = from_code.upper(), to_code.upper()
+    try:
+        rate, updated_at, is_stale = usecases.get_rate(from_code, to_code)
+    except ApiRequestError as error:
+        print(f"Курс {from_upper}→{to_upper} недоступен. Повторите попытку позже.")
+        print(f"Причина: {error.reason}")
+        return
+    updated_text = updated_at.replace("T", " ").rstrip("Z") if updated_at else "-"
     print(
-        f"Курс {from_code}→{to_code}: {format_rate(rate)} "
+        f"Курс {from_upper}→{to_upper}: {format_rate(rate)} "
         f"(обновлено: {updated_text})"
     )
     if rate:
-        print(f"Обратный курс {to_code}→{from_code}: {format_rate(1 / rate)}")
+        print(f"Обратный курс {to_upper}→{from_upper}: {format_rate(1 / rate)}")
+    if is_stale:
+        print("Внимание: данные устарели. Выполните 'update-rates'.")
+
+
+def cmd_update_rates(options):
+    """Команда update-rates: немедленно обновить курсы из внешних API."""
+    try:
+        report = usecases.refresh_rates(options.get("source"))
+    except ApiRequestError as error:
+        print(f"Update failed: {error.reason}. Check logs/parser.log for details.")
+        return
+    summary = (
+        f"Total rates updated: {report['total']}. "
+        f"Last refresh: {report['last_refresh']}"
+    )
+    if report["errors"]:
+        print(
+            "Update completed with errors. Check logs/parser.log for details. "
+            + summary
+        )
+    else:
+        print(f"Update successful. {summary}")
+
+
+def cmd_show_rates(options):
+    """Команда show-rates: курсы из локального кеша в виде таблицы."""
+    top = options.get("top")
+    if top is not None:
+        if not top.isdigit() or int(top) <= 0:
+            raise ValueError("'top' должен быть положительным целым числом")
+        top = int(top)
+    last_refresh, rows = usecases.show_rates(
+        options.get("currency"), top, options.get("base")
+    )
+    print(f"Rates from cache (updated at {last_refresh}):")
+    table = PrettyTable(["Pair", "Rate", "Updated at", "Source"])
+    table.align = "l"
+    for pair, rate, updated_at, source in rows:
+        table.add_row([pair, format_rate(rate), updated_at, source])
+    print(table)
+
+
+def cmd_schedule_updates(options):
+    """Команда schedule-updates: периодическое обновление курсов."""
+    interval = int(options.get("interval", usecases.scheduler_interval()))
+    times = options.get("times")
+    print(f"Автообновление каждые {interval} с. Остановить: Ctrl+C")
+    done = usecases.run_scheduler(interval, int(times) if times else None)
+    print(f"Выполнено обновлений: {done}")
 
 
 def cmd_list_currencies(options):
     """Команда list-currencies: показывает все поддерживаемые валюты."""
+    table = PrettyTable(["Валюта"])
+    table.align = "l"
     for currency in get_all_currencies():
-        print(currency.get_display_info())
+        table.add_row([currency.get_display_info()])
+    print(table)
 
 
 COMMANDS = {
@@ -177,6 +241,9 @@ COMMANDS = {
     "sell": cmd_sell,
     "get-rate": cmd_get_rate,
     "list-currencies": cmd_list_currencies,
+    "update-rates": cmd_update_rates,
+    "show-rates": cmd_show_rates,
+    "schedule-updates": cmd_schedule_updates,
 }
 
 

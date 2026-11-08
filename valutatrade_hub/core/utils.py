@@ -1,16 +1,15 @@
 """Вспомогательные функции: валидация, форматирование, конвертация валют."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from valutatrade_hub.core.currencies import get_currency, is_crypto
 
 BASE_CURRENCY = "USD"
 FIAT_PRECISION = 2
 CRYPTO_PRECISION = 4
-STUB_SOURCE = "StubRates"
 
-# Заглушка курсов: стоимость 1 единицы валюты в USD.
-# Используется, если Parser Service ещё ни разу не обновлял кеш.
+# Резервные курсы: стоимость 1 единицы валюты в USD.
+# Используются для оценки портфеля, если в кеше rates.json ещё нет пары.
 DEFAULT_EXCHANGE_RATES = {
     "EUR_USD": 1.0786,
     "GBP_USD": 1.2740,
@@ -23,9 +22,17 @@ DEFAULT_EXCHANGE_RATES = {
 }
 
 
-def now_iso():
-    """Текущее время в ISO-формате без микросекунд."""
-    return datetime.now().replace(microsecond=0).isoformat()
+def parse_utc(timestamp):
+    """Превращает '2025-10-10T12:00:00Z' в datetime с часовым поясом UTC."""
+    moment = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment
+
+
+def seconds_since(timestamp):
+    """Сколько секунд прошло с момента timestamp (UTC)."""
+    return (datetime.now(timezone.utc) - parse_utc(timestamp)).total_seconds()
 
 
 def validate_currency_code(code):

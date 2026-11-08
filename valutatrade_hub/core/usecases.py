@@ -1,22 +1,23 @@
 """Бизнес-логика: регистрация, вход, портфель, покупка, продажа, курсы."""
 
-from datetime import datetime
-
+from valutatrade_hub.core.currencies import is_crypto
 from valutatrade_hub.core.exceptions import ApiRequestError, CurrencyNotFoundError
 from valutatrade_hub.core.models import Portfolio, User
 from valutatrade_hub.core.utils import (
     BASE_CURRENCY,
     DEFAULT_EXCHANGE_RATES,
-    STUB_SOURCE,
     convert,
     format_amount,
     get_usd_rate,
-    now_iso,
+    seconds_since,
     validate_currency_code,
 )
 from valutatrade_hub.decorators import log_action
 from valutatrade_hub.infra.database import DatabaseManager
 from valutatrade_hub.infra.settings import SettingsLoader
+from valutatrade_hub.parser_service.config import ParserConfig
+from valutatrade_hub.parser_service.scheduler import RatesScheduler
+from valutatrade_hub.parser_service.updater import build_updater
 
 USERS = "users_file"
 PORTFOLIOS = "portfolios_file"
@@ -106,42 +107,26 @@ def is_fresh(timestamp):
     """Проверяет, что метка времени моложе TTL из настроек."""
     if not timestamp:
         return False
-    updated = datetime.fromisoformat(timestamp.replace("Z", ""))
-    age = (datetime.now() - updated).total_seconds()
-    return age < settings.get("rates_ttl_seconds")
+    return seconds_since(timestamp) < settings.get("rates_ttl_seconds")
 
 
-def fetch_fresh_rates():
-    """Получает свежие курсы. Пока Parser Service не подключён — заглушка.
-
-    Возвращает словарь {'BTC_USD': курс, ...} или бросает ApiRequestError.
-    """
-    if not DEFAULT_EXCHANGE_RATES:
-        raise ApiRequestError("источник курсов недоступен")
-    return dict(DEFAULT_EXCHANGE_RATES), STUB_SOURCE
+def refresh_rates(source=None):
+    """Запускает Parser Service и возвращает отчёт об обновлении."""
+    return build_updater(source).run_update()
 
 
-def refresh_rates_cache():
-    """Обновляет rates.json свежими курсами и возвращает новый кеш."""
-    rates, source = fetch_fresh_rates()
-    timestamp = now_iso()
+def scheduler_interval():
+    """Интервал автообновления по умолчанию из конфигурации парсера."""
+    return ParserConfig().SCHEDULER_INTERVAL
 
-    def apply(cache):
-        cache.setdefault("pairs", {})
-        for pair, rate in rates.items():
-            cache["pairs"][pair] = {
-                "rate": rate,
-                "updated_at": timestamp,
-                "source": source,
-            }
-        cache["last_refresh"] = timestamp
-        return cache
 
-    return database.update(RATES, dict(EMPTY_RATES_CACHE), apply)
+def run_scheduler(interval, times=None):
+    """Запускает периодическое обновление курсов; возвращает число запусков."""
+    return RatesScheduler(build_updater(), interval).run(times)
 
 
 def get_current_rates():
-    """Возвращает словарь {'BTC_USD': курс, ...}: кеш поверх заглушки."""
+    """Возвращает словарь {'BTC_USD': курс, ...}: кеш поверх резервных курсов."""
     rates = dict(DEFAULT_EXCHANGE_RATES)
     for pair, info in load_rates_cache().get("pairs", {}).items():
         rates[pair] = info["rate"]
@@ -149,25 +134,73 @@ def get_current_rates():
 
 
 def get_rate(from_code, to_code):
-    """Возвращает (курс from→to, время обновления) с учётом TTL кеша."""
+    """Возвращает (курс, время обновления, устарел ли) с учётом TTL кеша.
+
+    Если кеш старше TTL — пробуем обновить его через Parser Service.
+    Не получилось и данных нет совсем — бросаем ApiRequestError.
+    """
     from_code = validate_currency_code(from_code)
     to_code = validate_currency_code(to_code)
 
     cache = load_rates_cache()
     if not is_fresh(cache.get("last_refresh")):
         try:
-            cache = refresh_rates_cache()
-        except ApiRequestError as error:
-            raise ApiRequestError(
-                f"курс {from_code}→{to_code} устарел, а обновить его не удалось "
-                f"({error.reason})"
-            ) from error
+            refresh_rates()
+            cache = load_rates_cache()
+        except ApiRequestError:
+            pass
 
-    rates = {pair: info["rate"] for pair, info in cache["pairs"].items()}
+    rates = {pair: info["rate"] for pair, info in cache.get("pairs", {}).items()}
     rate = convert(1.0, from_code, to_code, rates)
     if rate is None:
         raise ApiRequestError(f"нет данных о курсе {from_code}→{to_code}")
-    return rate, cache["last_refresh"]
+    last_refresh = cache.get("last_refresh")
+    return rate, last_refresh, not is_fresh(last_refresh)
+
+
+def show_rates(currency=None, top=None, base=None):
+    """Курсы из кеша с фильтрами: валюта, топ-N криптовалют, другая база.
+
+    Возвращает (время обновления, список (пара, курс, обновлено, источник)).
+    """
+    cache = load_rates_cache()
+    pairs = cache.get("pairs", {})
+    if not pairs:
+        raise ValueError(
+            "Локальный кеш курсов пуст. Выполните 'update-rates', "
+            "чтобы загрузить данные."
+        )
+
+    rows = []
+    for pair, info in pairs.items():
+        rows.append((pair, info["rate"], info["updated_at"], info["source"]))
+
+    if base:
+        base = validate_currency_code(base)
+        if base != BASE_CURRENCY:
+            base_rate = get_usd_rate(base, {p: r for p, r, _, _ in rows})
+            if base_rate is None:
+                raise ValueError(f"Курс для '{base}' не найден в кеше.")
+            rows = [
+                (f"{pair.split('_')[0]}_{base}", rate / base_rate, updated, source)
+                for pair, rate, updated, source in rows
+                if pair.endswith(f"_{BASE_CURRENCY}")
+                and not pair.startswith(f"{base}_")
+            ]
+
+    if currency:
+        code = currency.strip().upper()
+        rows = [row for row in rows if code in row[0].split("_")]
+        if not rows:
+            raise ValueError(f"Курс для '{code}' не найден в кеше.")
+
+    if top is not None:
+        rows = [row for row in rows if is_crypto(row[0].split("_")[0])]
+        rows.sort(key=lambda row: row[1], reverse=True)
+        rows = rows[:top]
+    else:
+        rows.sort(key=lambda row: row[0])
+    return cache.get("last_refresh"), rows
 
 
 def get_rate_to_usd(code, rates):
