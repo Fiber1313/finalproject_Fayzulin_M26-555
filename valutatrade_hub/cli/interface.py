@@ -3,6 +3,12 @@
 import shlex
 
 from valutatrade_hub.core import usecases
+from valutatrade_hub.core.currencies import get_all_currencies, get_supported_codes
+from valutatrade_hub.core.exceptions import (
+    ApiRequestError,
+    CurrencyNotFoundError,
+    InsufficientFundsError,
+)
 from valutatrade_hub.core.utils import (
     BASE_CURRENCY,
     format_amount,
@@ -10,6 +16,7 @@ from valutatrade_hub.core.utils import (
     format_rate,
     parse_amount,
 )
+from valutatrade_hub.logging_config import setup_logging
 
 PROMPT = "valuta> "
 OPTION_PREFIX = "--"
@@ -24,6 +31,7 @@ HELP_TEXT = """
   buy --currency <код> --amount <количество>      купить валюту
   sell --currency <код> --amount <количество>     продать валюту
   get-rate --from <код> --to <код>                курс валюты
+  list-currencies                                 поддерживаемые валюты
   help                                            эта справка
   exit                                            выход из программы
 """
@@ -92,9 +100,7 @@ def cmd_logout(options):
 def cmd_show_portfolio(options):
     """Команда show-portfolio."""
     user = current_user()
-    base, rows, total = usecases.portfolio_report(
-        user, options.get("base", BASE_CURRENCY)
-    )
+    base, rows, total = usecases.portfolio_report(user, options.get("base"))
     if not rows:
         print(f"Портфель пользователя '{user.username}' пуст")
         return
@@ -156,6 +162,12 @@ def cmd_get_rate(options):
         print(f"Обратный курс {to_code}→{from_code}: {format_rate(1 / rate)}")
 
 
+def cmd_list_currencies(options):
+    """Команда list-currencies: показывает все поддерживаемые валюты."""
+    for currency in get_all_currencies():
+        print(currency.get_display_info())
+
+
 COMMANDS = {
     "register": cmd_register,
     "login": cmd_login,
@@ -164,6 +176,7 @@ COMMANDS = {
     "buy": cmd_buy,
     "sell": cmd_sell,
     "get-rate": cmd_get_rate,
+    "list-currencies": cmd_list_currencies,
 }
 
 
@@ -190,6 +203,15 @@ def execute(line):
 
     try:
         handler(parse_options(args))
+    except InsufficientFundsError as error:
+        print(error)
+    except CurrencyNotFoundError as error:
+        print(error)
+        print(f"Поддерживаемые валюты: {', '.join(get_supported_codes())}")
+        print("Подсказка: help — список команд, list-currencies — все валюты.")
+    except ApiRequestError as error:
+        print(error)
+        print("Повторите попытку позже или проверьте подключение к сети.")
     except ValueError as error:
         print(error)
     return True
@@ -197,6 +219,7 @@ def execute(line):
 
 def main():
     """Запускает интерактивный режим приложения."""
+    setup_logging()
     print(HELP_TEXT)
     while True:
         try:
